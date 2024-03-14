@@ -17,11 +17,35 @@ bot_running = None
 att_mess = {}
 liste_log_option = ["message_edit", "verif_censure"]
 sleep = threading.Event()
+role_cache = None
+
+
+class Button:
+    def __init__(self, label, color, function):
+        self.label = label
+        self.color = color
+        self.function = function
+
+
+class Selecteur:
+    def __init__(self, label, minim, maxi, option, function):
+        self.label = label
+        self.min = minim
+        self.max = maxi
+        self.option = option
+        self.function = function
+
+
+class SelecteurOption:
+    def __init__(self, label, description, value):
+        self.label = label
+        self.description = description
+        self.value = value
 
 
 class Log:
-    def __init__(self, channel, title, color, user, name, field: list[dict[str, str]], desc=""):
-        self.text_channel: discord.TextChannel = channel
+    def __init__(self, guild, title, color, user, name, field: list[dict[str, str]], desc=""):
+        self.guild: discord.Guild = guild
         self.title = title
         self.desc = desc
         self.color = color
@@ -41,35 +65,36 @@ class Log:
     async def send(self):
         with open("servers.json", "r") as file:
             file = json.load(file)
-        guild_id = str(self.text_channel.guild.id.__str__())
+        guild_id = str(self.guild.id.__str__())
         serveur_info = file[guild_id]
         is_commande = self.name in [i.name for i in bot.commands]
         log_activate = await verif_serv_in_serveur_file([guild_id, "log_option", self.name], False)
         channel_log = serveur_info.get("channel_log_id")
         if log_activate and channel_log:
             if is_commande:
-                await self.text_channel.guild.get_channel(serveur_info["channel_log_id"]).send(embed=self.embed())
+                await self.guild.get_channel(serveur_info["channel_log_id"]).send(embed=self.embed())
             else:
-                await self.text_channel.guild.get_channel(serveur_info["channel_log_id"]).send(embed=self.embed())
+                await self.guild.get_channel(serveur_info["channel_log_id"]).send(embed=self.embed())
 
 
 class View(discord.ui.View):
     def __init__(self, ctx, list_button):
         super().__init__()
         for i in list_button:
-            if i["type"] == discord.ui.Button:
-                button: discord.ui.Button = i["type"](label=i["label"], style=i["color"])
-                button.callback = lambda inter, btn=i: btn["function"](inter) if inter.user == ctx.author \
+            if isinstance(i, Button):
+                button: discord.ui.Button = discord.ui.Button(label=i.label, style=i.color)
+                button.callback = lambda inter, btn=i: btn.function(inter) if inter.user == ctx.author \
                     else inter.response.defer()
                 self.add_item(button)
-            elif i["type"] == discord.ui.Select:
-                select: discord.ui.Select = discord.ui.Select(placeholder=i["label"],
-                                                              min_values=i["min"], max_values=i["max"],
+            elif isinstance(i, Selecteur):
+                select: discord.ui.Select = discord.ui.Select(placeholder=i.label,
+                                                              min_values=i.min, max_values=i.max,
                                                               options=[discord.SelectOption(
-                                                                  label=j["label"],
-                                                                  description=j["description"],
-                                                                  value=j["value"]) for j in i["option"]])
-                select.callback = lambda inter, fi=i: fi["function"](inter, select.values) if inter.user == ctx.author \
+                                                                  label=j.label,
+                                                                  description=j.description,
+                                                                  value=j.value) for j in i.option])
+                select.callback = lambda inter, fi=i, slc=select: (
+                    fi.function(inter, slc.values)) if inter.user == ctx.author \
                     else inter.response.defer()
                 self.add_item(select)
 
@@ -113,7 +138,7 @@ async def verif_censure(message: discord.Message):
     # si un mot est censure le message est suprimé est un log envoyé
     if mot_trouve:
         await message.delete()
-        await (Log(channel=message.channel,
+        await (Log(guild=message.guild,
                    title="Censure !",
                    color=discord.Color(0xFF0000),
                    user=message.author,
@@ -129,7 +154,7 @@ async def verif_serv_in_serveur_file(path, value=None):
     source = server_file
     for j in path:
         if j not in source.keys():
-            if j != path[-1] or value:
+            if j != path[-1] or (value is not None):
                 source[j] = value if j == path[-1] else {}
             with open("servers.json", "w") as server_file_edit:
                 json.dump(server_file, server_file_edit, indent=1)
@@ -139,11 +164,11 @@ async def verif_serv_in_serveur_file(path, value=None):
 
 @bot.event
 async def on_message(ctx: discord.Message):
-    await verif_serv_in_serveur_file([str(ctx.guild.id)], False)
+    await verif_serv_in_serveur_file([str(ctx.guild.id)], {})
     global att_mess
     if att_mess:
         if att_mess["channel"] == ctx.channel and att_mess["user"] == ctx.author:
-            if att_mess["type"] in ["supre", "add_mot"]:
+            if att_mess["type"] in ["supre", "add_mot", "role_name"]:
                 await att_mess["function"](ctx)
         await bot.process_commands(ctx)
         return
@@ -180,7 +205,7 @@ async def on_raw_message_edit(ctx: discord.RawMessageUpdateEvent):
         file = json.load(file)
         log_activate = file.get(guild_id).get("log_option").get("message_edit")
     if log_activate:
-        await Log(msg.channel, "Message Modifié", discord.Color(0xFDDB00),
+        await Log(msg.guild, "Message Modifié", discord.Color(0xFDDB00),
                   msg.author, "message_edit", [
                       {"name": "Ancien message", "values": f"{ancien_message}"},
                       {"name": "Nouveau message", "values": f"{msg.content}"},
@@ -188,18 +213,151 @@ async def on_raw_message_edit(ctx: discord.RawMessageUpdateEvent):
                                                  f"{guild_id}/{channel_id}/{msg.id}"}]).send()
 
 
+@bot.event
+async def on_guild_role_create(role: discord.Role):
+    description = (f"Nom: {role.name}\n"
+                   f"Mentionnable: {role.mentionable}\n"
+                   f"Affiché a part: {role.hoist}\n"
+                   f"Couleur HTML: {role.color}"
+                   f"   Permissions:\n"
+                   f"-{'\n -'.join([i[0] for i in role.permissions if i[1]])}")
+    log = [i async for i in role.guild.audit_logs(limit=1, action=discord.AuditLogAction.role_create)]
+    print(log[0].user.name)
+    print(role.id)
+    if role.id == role_cache:
+        return
+    await Log(role.guild, "Role crée", discord.Color(0x54FD00), log[0].user, "creer_role",
+              field=[{"name": "Source", "values": "discord"}], desc=description).send()
+
+
+@bot.event
+async def on_guild_role_update(anc_role, role: discord.Role):
+    log = [i async for i in role.guild.audit_logs(limit=1, action=discord.AuditLogAction.role_update)]
+    print(log)
+    if not log[0].target == role:
+        return
+
+    description = (f"Nom: {role.name}\n"
+                   f"Mentionnable: {role.mentionable}\n"
+                   f"Affiché a part: {role.hoist}\n"
+                   f"Couleur HTML: {role.colour}\n"
+                   f"   Permissions:\n"
+                   f"-{'\n -'.join([i[0] for i in role.permissions if i[1]])}")
+    await Log(role.guild, "Role Modifié", discord.Color(0xFDDB00), log[0].user, "creer_role",
+              field=[{"name": "Source", "values": "discord"}], desc=description).send()
+
+
+async def cree_role(name, perms, ctx: discord.Message):
+    global role_cache
+    role = await ctx.guild.create_role(name=name, permissions=discord.Permissions(perms.get("perms")),
+                                       hoist=perms.get("affiche"), mentionable=perms.get("mention"))
+    role_cache = role.id
+    print(role_cache, "cache")
+
+    description = (f"Nom: {name}\n"
+                   f"Mentionnable: {perms.get('mention')}\n"
+                   f"Affiché a part: {perms.get('affiche')}\n"
+                   f"Couleur HTML: {role.color}"
+                   f"   Permissions:\n"
+                   f"-{'\n -'.join([i[0] for i in role.permissions if i[1]])}")
+    await ctx.delete()
+    await Log(ctx.guild, "Role crée", discord.Color(0x54FD00), ctx.author, "creer_role",
+              field=[{"name": "Source", "values": "Commande"}], desc=description).send()
+
+
+async def choice_role_name(inter: discord.Interaction, liste_perm_select, value):
+    embed = discord.Embed(title="Role")
+    embed.add_field(name="Nom du rôle", value="Choisit le nom du rôle")
+    liste_perm = []
+    for i in liste_perm_select.get('perms').values():
+        liste_perm += [int(j) for j in i]
+    liste_perm_select["perms"] = sum(liste_perm)
+    liste_perm_select["mention"] = value
+
+    await inter.response.edit_message(view=None, embed=embed)
+    att_mess["channel"] = inter.channel
+    att_mess["user"] = inter.user
+    att_mess["type"] = "role_name"
+    att_mess["function"] = lambda ctx: cree_role(ctx.content, liste_perm_select, ctx)
+
+
+async def role_mentionnable(inter, role_option, ctx, value):
+    role_option["affiche"] = value
+    embed = discord.Embed(title="Role")
+    embed.add_field(name="Permet de mentionner ce role", value="")
+    await inter.response.edit_message(embed=embed,
+                                      view=View(ctx,
+                                                [
+                                                    Button("Activer",
+                                                           discord.ButtonStyle.green,
+                                                           lambda finter: choice_role_name(finter,
+                                                                                           role_option,
+                                                                                           True)),
+                                                    Button("Desactiver",
+                                                           discord.ButtonStyle.red,
+                                                           lambda finter: choice_role_name(finter,
+                                                                                           role_option,
+                                                                                           False))]))
+
+
+async def display_role(inter, role_option, ctx: commands.Context):
+    embed = discord.Embed(title="Role")
+    embed.add_field(name="Afficher ce role a part", value="")
+    await inter.response.edit_message(embed=embed,
+                                      view=View(ctx,
+                                                [
+                                                    Button("Activer",
+                                                           discord.ButtonStyle.green,
+                                                           lambda finter: role_mentionnable(finter,
+                                                                                            role_option,
+                                                                                            ctx,
+                                                                                            True)),
+                                                    Button("Desactiver",
+                                                           discord.ButtonStyle.red,
+                                                           lambda finter: role_mentionnable(finter,
+                                                                                            role_option,
+                                                                                            ctx,
+                                                                                            False))
+                                                ]))
+
+
+async def update_list_role_perm(inter: discord.Interaction, values, liste_perm_select):
+    liste_perm_select[inter.data.get("custom_id")] = values
+    await inter.response.defer()
+
+
 @bot.command()
-async def creer_role(ctx: commands.Context):
-    embed = discord.Embed(title="Choisit les permissions")
-    await ctx.send()
-    await Log(ctx.channel,
+async def creer_role(ctx: commands.Context, nom_role):
+    embed = discord.Embed(title="Création Du role", description=f"1️⃣ - Changer le Nom\n"
+                                                                f"2️⃣ - Permissions\n"
+                                                                f"3️⃣ - Affiché a part des autres roles\n"
+                                                                f"4️⃣ - Mentionnable\n"
+                                                                f"5️⃣ - Couleur")
+    await ctx.send(embed=embed, view=View(ctx,
+                                          [Selecteur(
+                                              "permissions",
+                                              1, len(j),
+                                              [SelecteurOption(
+                                                  i[0],
+                                                  "",
+                                                  eval(f"discord.Permissions.{i[0]}.flag"))
+                                                  for i in j],
+                                              lambda inter, value: update_list_role_perm(
+                                                  inter, value, liste_perm_select))
+                                              for j in liste_perm_split] + [Button(
+                                               "Ok", discord.ButtonStyle.green,
+                                               lambda inter: display_role(inter,
+                                                                          {"perms": liste_perm_select},
+                                                                          ctx))]))
+
+    await Log(ctx.guild,
               "Commande",
               discord.Color(0x0000FF),
               None,
               "creer_role",
               [{"name": f"Channel", "values": ctx.channel.name, "inline": True},
                {"name": "user", "values": ctx.author.name, "inline": True},
-               {"name": "commande", "value": f"{prexife}creer_role"}]).send()
+               {"name": "commande", "values": f"{prexife}creer_role"}]).send()
 
 
 # demande le mot a supprimer/ajouter
@@ -210,10 +368,9 @@ async def request_chosen_word(inter: discord.Interaction, embed, ctx, name, valu
     global att_mess
     embed.add_field(name=name, value=value)
     await inter.response.edit_message(embed=embed,
-                                      view=View(ctx, [{"type": discord.ui.Button,
-                                                      "label": "Annuler",
-                                                       "color": discord.ButtonStyle.grey,
-                                                       "function": lambda inter_2: reset_embed_censure(inter_2, ctx)}]))
+                                      view=View(ctx, [
+                                          Button("Annuler", discord.ButtonStyle.grey,
+                                                 lambda inter_2: reset_embed_censure(inter_2, ctx))]))
     att_mess["channel"] = inter.channel
     att_mess["user"] = ctx.author
     att_mess["type"] = type_mess
@@ -235,22 +392,16 @@ async def reset_embed_censure(inter, ctx):
         title='Mot Interdit',
         description=" / ".join(server_file[str(ctx.guild.id)]["censure"]))
     await inter.response.edit_message(embed=embed, view=View(ctx, list_button=[
-        {"type": discord.ui.Button,
-         "label": "Supprimer",
-         "color": discord.ButtonStyle.red,
-         "function": lambda inter_2: request_chosen_word(inter_2, embed, ctx,
-                                                         name="Supprimer", value="Ecrivez le mot à supprimer",
-                                                         type_mess="supre", func=update_word_censure)},
-        {"type": discord.ui.Button,
-         "label": "Ajouter",
-         "color": discord.ButtonStyle.green,
-         "function": lambda inter_2: request_chosen_word(inter_2, embed, ctx,
-                                                         name="Ajouter", value="Ecrivez le mot à rajouter",
-                                                         type_mess="add_mot", func=update_word_censure)},
-        {"type": discord.ui.Button,
-         "label": "Finit",
-         "color": discord.ButtonStyle.secondary,
-         "function": lambda inter_2: inter_2.response.edit_message(view=None)}]))
+        Button("Supprimer", discord.ButtonStyle.red,
+               lambda finter: request_chosen_word(finter, embed, ctx,
+                                                  name="Supprimer", value="Ecrivez le mot à supprimer",
+                                                  type_mess="supre", func=update_word_censure)),
+        Button("Ajouter", discord.ButtonStyle.green,
+               lambda finter: request_chosen_word(finter, embed, ctx,
+                                                  name="Ajouter", value="Ecrivez le mot à rajouter",
+                                                  type_mess="add_mot", func=update_word_censure)),
+        Button("Finit", discord.ButtonStyle.secondary,
+               lambda inter_2: inter_2.response.edit_message(view=None))]))
     att_mess = {}
 
 
@@ -283,11 +434,8 @@ async def update_word_censure(ctx_old, ctx, ctx_best, func: str):
     att_mess = {}
     date = ctx_best.message.created_at
     await ctx_old.message.edit(embed=embed, view=View(ctx_best, [
-           {"type": discord.ui.Button,
-            "label": "OK",
-            "color": discord.ButtonStyle.success,
-            "function": lambda inter: reset_embed_censure(inter, ctx_best)}]))
-    await Log(channel=ctx_best.channel,
+        Button("OK", discord.ButtonStyle.success, lambda inter: reset_embed_censure(inter, ctx_best))]))
+    await Log(guild=ctx_best.guild,
               title=f"Mot censuré {'Rajouté' if func == 'add' else 'Supprimé'}",
               color=discord.Color(0x54FD00) if func == "add" else discord.Color(0xFD0000),
               user=ctx_best.author, name="censure",
@@ -312,26 +460,20 @@ async def censure(ctx: discord.ext.commands.Context):
     liste_mot_censure = servers_file[str(ctx.guild.id)]["censure"]
     embed = discord.Embed(title="Mot Interdit", description=" / ".join(liste_mot_censure))
     await ctx.channel.send(embed=embed, view=View(ctx, [
-        {"type": discord.ui.Button,
-         "label": "Supprimer",
-         "color": discord.ButtonStyle.red,
-         "function": lambda inter: request_chosen_word(inter, embed, ctx,
-                                                       name="Supprimer", value="Ecrivez le mot à supprimer",
-                                                       type_mess="supre", func=update_word_censure)},
-        {"type": discord.ui.Button,
-         "label": "Ajouter",
-         "color": discord.ButtonStyle.green,
-         "function": lambda inter: request_chosen_word(inter, embed, ctx,
-                                                       name="Ajouter", value="Ecrivez le mot à rajouter",
-                                                       type_mess="add_mot", func=update_word_censure)},
-        {"type": discord.ui.Button,
-         "label": "Finit",
-         "color": discord.ButtonStyle.secondary,
-         "function": lambda inter_2: inter_2.response.edit_message(view=None)}]))
+        Button("Supprimer", discord.ButtonStyle.red,
+               lambda inter: request_chosen_word(inter, embed, ctx,
+                                                 name="Supprimer", value="Ecrivez le mot à supprimer",
+                                                 type_mess="supre", func=update_word_censure)),
+        Button("Ajouter", discord.ButtonStyle.green,
+               lambda inter: request_chosen_word(inter, embed, ctx,
+                                                 name="Ajouter", value="Ecrivez le mot à rajouter",
+                                                 type_mess="add_mot", func=update_word_censure)),
+        Button("Finit", discord.ButtonStyle.secondary,
+               lambda inter_2: inter_2.response.edit_message(view=None))]))
 
     await Log(title=f"Commande exécuté",
               color=discord.Color(0x0000FF),
-              channel=ctx.channel,
+              guild=ctx.guild,
               user=None,
               name="censure",
               field=[{"name": "Channel", "values": ctx.channel.name, "inline": True},
@@ -350,7 +492,7 @@ async def set_log_salon_2(inter: discord.Interaction, values):
     await inter.response.edit_message(
         content=f"Channel choisit {inter.guild.get_channel(int(values[0])) if values[0] else 'Aucun'}",
         view=None)
-    await (Log(channel=inter.channel,
+    await (Log(guild=inter.guild,
                title="Salon de log Définit",
                color=discord.Color(0xFDDB00),
                user=inter.user,
@@ -371,20 +513,19 @@ async def set_log_salon(ctx: commands.Context):
     await ctx.send(
         "Choisit un channel pour les logs",
         view=View(ctx,
-                  list_button=[{"type": discord.ui.Select,
-                                "label": "Channel",
-                                "min": 1, "max": 1,
-                                "option": [{"label": "Aucun",
-                                            "description": 'selection actuel' if not channel_log else "",
-                                            "value": 0}] +
-                                          [{"label": i.name,
-                                            "description": 'selection actuel' if channel_log == i.id else "",
-                                            "value": i.id} for i in
-                                           sorted([i for i in ctx.guild.channels if type(i) is discord.TextChannel and
-                                                   i.permissions_for(ctx.author).read_messages],
-                                           key=lambda x: x.category.position if x.category else -1)],
-                                "function": lambda inter, values: set_log_salon_2(inter, values)}]))
-    await Log(ctx.channel, "Commande", discord.Color(0x0000FF),
+                  list_button=[
+                      Selecteur("Channel", 1, 1,
+                                [SelecteurOption("Aucun",
+                                                 'selection actuel' if not channel_log else "", 0)] +
+                                [SelecteurOption(i.name,
+                                                 'selection actuel' if channel_log == i.id else "",
+                                                 i.id) for i in
+                                 sorted([i for i in ctx.guild.channels if type(i) is discord.TextChannel and
+                                         i.permissions_for(ctx.author).read_messages],
+                                        key=lambda x: x.category.position if x.category else -1)],
+                                lambda inter, values: set_log_salon_2(inter, values))]))
+
+    await Log(ctx.guild, "Commande", discord.Color(0x0000FF),
               None, "set_log_salon", [
                   {"name": "Channel", "values": ctx.channel.name, "inline": True},
                   {"name": "user", "values": ctx.author.name, "inline": True},
@@ -403,16 +544,11 @@ async def reset_embed_log_option(inter: discord.Interaction, ctx):
     await inter.response.edit_message(
         embed=embed,
         view=View(
+
             ctx, [
-                {"type": discord.ui.Select,
-                 "label": "options",
-                 "min": 1, "max": 1,
-                 "option": [
-                     {"label": j[0],
-                      "description": j[1],
-                      "value": str([j[0], j[1]])}
-                     for j in liste_log_option_serv],
-                 "function": lambda finter, value: log_option_2(finter, value, ctx)}]))
+                Selecteur("options", 1, 1,
+                          [SelecteurOption(j[0], j[1], str([j[0], j[1]])) for j in liste_log_option_serv],
+                          lambda finter, value: log_option_2(finter, value, ctx))]))
 
 
 @bot.command()
@@ -429,7 +565,7 @@ async def clear(ctx: commands.Context, nbr: str):
                          f"{i.content}") async
                         for i in ctx.channel.history(limit=int(nbr))][::-1]
     await ctx.channel.purge(limit=int(nbr))
-    await Log(ctx.channel, "Clear", discord.Color(0x731010),
+    await Log(ctx.guild, "Clear", discord.Color(0x731010),
               ctx.author, "clear", [
                   {"name": "Channel", "values": ctx.channel.name},
                   {"name": "Nombre de messages supprimés", "values": nbr}],
@@ -443,7 +579,7 @@ async def set_log_option(inter, option, value, ctx: commands.Context):
     with open("servers.json", "w") as file_edit:
         json.dump(file, file_edit, indent=1)
     await reset_embed_log_option(inter, ctx)
-    await Log(ctx.channel, "Log Option", discord.Color.yellow(), ctx.author, "set_log_option",
+    await Log(ctx.guild, "Log Option", discord.Color.yellow(), ctx.author, "set_log_option",
               [
             {"name": "channel", "values": ctx.channel.name},
             {"name": "option", "values": f"log de {option} {'Activé' if value else 'Désativé'}"}]).send()
@@ -457,18 +593,16 @@ async def log_option_2(inter: discord.Interaction, value, ctx):
     await inter.response.edit_message(embed=embed,
                                       view=View(ctx,
                                                 [
-                                                     {"type": discord.ui.Button,
-                                                      "label": "Acitiver" if not value[1] else "Désactiver",
-                                                      "color": discord.ButtonStyle.green,
-                                                      "function": lambda finter: set_log_option(
-                                                          finter,
-                                                          value[0],
-                                                          True if not value[1] else False,
-                                                          ctx)},
-                                                     {"type": discord.ui.Button,
-                                                      "label": "Annuler",
-                                                      "color": discord.ButtonStyle.red,
-                                                      "function": lambda finter: reset_embed_log_option(finter, ctx)}]))
+                                                    Button("Acitiver" if not value[1] else "Désactiver",
+                                                           discord.ButtonStyle.green,
+                                                           lambda finter: set_log_option(
+                                                               finter,
+                                                               value[0],
+                                                               True if not value[1] else False,
+                                                               ctx)),
+                                                    Button("Annuler",
+                                                           discord.ButtonStyle.red,
+                                                           lambda finter: reset_embed_log_option(finter, ctx))]))
 
 
 @bot.command()
@@ -485,17 +619,13 @@ async def log_option(ctx: commands.Context):
     await ctx.send(view=View(
         ctx,
         [
-            {"type": discord.ui.Select,
-             "label": "options",
-             "min": 1, "max": 1,
-             "option": [
-                 {"label": j[0],
-                  "description": str(j[1]),
-                  "value": str([j[0], j[1]])}
-                 for j in liste_log_option_serv],
-             "function": lambda inter, value: log_option_2(inter, value, ctx)}]), embed=embed)
+            Selecteur("options", 1, 1, [
+                SelecteurOption(j[0], j[1], str([j[0], j[1]]))
+                for j in liste_log_option_serv],
+                      lambda inter, value: log_option_2(inter, value, ctx))]),
+        embed=embed)
 
-    await Log(ctx.channel, f"Commande exécuté", discord.Color(0x0000FF),
+    await Log(ctx.guild, f"Commande exécuté", discord.Color(0x0000FF),
               None, "log_option", [
          {"name": "channel", "values": ctx.channel.name, "inline": True},
          {"name": "User", "values": ctx.author.name, "inline": True},
@@ -630,7 +760,7 @@ async def on_ready():
 
     bot_running = True
     liste_log_option += [i.name for i in bot.commands]
-    print([(i[0], eval(f"discord.Permissions.{i[0]}.flag")) for i in discord.Permissions.all()])
+    print([(i[0], eval(f"discord.Permissions.{i[0]}.flag")) for i in list(discord.Permissions.all())[:24]])
     print("pret")
     print(datetime.datetime.now())
     threading.Thread(target=stat_serv).start()

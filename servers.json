@@ -81,5 +81,23 @@
   "log_option": {
    "message_edit": false
   }
+ },
+ "1073644641263562804": {
+  "censure": [
+   "con",
+   "saki",
+   "licorne"
+  ],
+  "log_option": {
+   "censure": false,
+   "verif_censure": true,
+   "set_log_salon": false,
+   "message_edit": false,
+   "creer_role": true,
+   "log_option": false,
+   "clear": false,
+   "set_log_option": false
+  },
+  "channel_log_id": 1217930967730225352
  }
 }
