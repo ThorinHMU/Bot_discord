@@ -48,16 +48,19 @@
    "connard",
    "patate douce",
    "con",
-   "mechant"
+   "mechant",
+   "ok"
   ],
-  "channel_log_id": 1189736378938949672,
+  "channel_log_id": 1218251782283722763,
   "log_option": {
-   "message_edit": false,
-   "censure": false,
+   "message_edit": true,
+   "censure": true,
    "clear": true,
-   "set_log_salon": false,
+   "set_log_salon": true,
    "log_option": false,
-   "creer_role": true
+   "creer_role": true,
+   "verif_censure": true,
+   "set_log_option": false
   }
  },
  "873628035545460736": {

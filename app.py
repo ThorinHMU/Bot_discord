@@ -11,7 +11,7 @@ import unidecode
 import asyncio
 
 instens = discord.Intents().all()
-prexife = "m."
+prexife = "t."
 bot = commands.Bot(command_prefix=prexife, intents=instens, help_command=None)
 bot_running = None
 att_mess = {}
@@ -44,7 +44,7 @@ class SelecteurOption:
 
 
 class Log:
-    def __init__(self, guild, title, color, user, name, field: list[dict[str, str]], desc=""):
+    def __init__(self, guild, title, color, user, name, field: list, desc=""):
         self.guild: discord.Guild = guild
         self.title = title
         self.desc = desc
@@ -119,9 +119,9 @@ async def verif_censure(message: discord.Message):
     # itaire sur la liste des mot censuré du serv + vérifi si un mot interdit est dans le message
     for mot_censure in servers_file[str(message.guild.id)]["censure"]:
         message_content = message.content.lower()
-        message_content = unidecode.unidecode(message_content)
+        message_content = "".join([unidecode.unidecode(i) if i.isalpha() else i for i in message_content])
 
-        liste_indexe = [i for i in range(len(message_content)) if message_content[i].isalnum()]
+        liste_indexe = [i for i in range(len(message_content)) if message_content[i].isalpha()]
         contract_mess = "".join([message_content[i] for i in liste_indexe])
         start = 0
         for i in range(contract_mess.count(mot_censure.replace(" ", ""))):
@@ -164,27 +164,32 @@ async def verif_serv_in_serveur_file(path, value=None):
 
 @bot.event
 async def on_message(ctx: discord.Message):
-    await verif_serv_in_serveur_file([str(ctx.guild.id)], {})
-    global att_mess
-    if att_mess:
-        if att_mess["channel"] == ctx.channel and att_mess["user"] == ctx.author:
-            if att_mess["type"] in ["supre", "add_mot", "role_name"]:
-                await att_mess["function"](ctx)
-        await bot.process_commands(ctx)
-        return
-    if ctx.author != bot.user:
-        await verif_censure(message=ctx)
-        with open("messages.json", "r") as file:
-            file = json.load(file)
-        file[str(ctx.id)] = ctx.content
-        with open("messages.json", "w") as file_edit:
-            json.dump(file, file_edit)
+    if not isinstance(ctx.channel, discord.DMChannel):
+
+        await verif_serv_in_serveur_file([str(ctx.guild.id)], {})
+        global att_mess
+        if att_mess:
+            if att_mess["channel"] == ctx.channel and att_mess["user"] == ctx.author:
+                if att_mess["type"] in ["supre", "add_mot", "role_color"]:
+                    await att_mess["function"](ctx)
+            await bot.process_commands(ctx)
+            return
+        if ctx.author != bot.user:
+            await verif_censure(message=ctx)
+            with open("messages.json", "r") as file:
+                file = json.load(file)
+            file[str(ctx.id)] = ctx.content
+            with open("messages.json", "w") as file_edit:
+                json.dump(file, file_edit)
     await bot.process_commands(ctx)
 
 
 @bot.event
 async def on_raw_message_edit(ctx: discord.RawMessageUpdateEvent):
+
     msg = await bot.get_guild(ctx.guild_id).get_channel(ctx.channel_id).fetch_message(ctx.message_id)
+    if isinstance(msg.channel, discord.DMChannel):
+        return
     if msg.author == bot.user:
         return
     guild_id = str(msg.guild.id)
@@ -211,6 +216,8 @@ async def on_raw_message_edit(ctx: discord.RawMessageUpdateEvent):
                       {"name": "Nouveau message", "values": f"{msg.content}"},
                       {"name": "Lien", "values": f"https://discord.com/channels/"
                                                  f"{guild_id}/{channel_id}/{msg.id}"}]).send()
+    if msg.author != bot.user:
+        await verif_censure(msg)
 
 
 @bot.event
@@ -222,8 +229,6 @@ async def on_guild_role_create(role: discord.Role):
                    f"   Permissions:\n"
                    f"-{'\n -'.join([i[0] for i in role.permissions if i[1]])}")
     log = [i async for i in role.guild.audit_logs(limit=1, action=discord.AuditLogAction.role_create)]
-    print(log[0].user.name)
-    print(role.id)
     if role.id == role_cache:
         return
     await Log(role.guild, "Role crée", discord.Color(0x54FD00), log[0].user, "creer_role",
@@ -231,9 +236,8 @@ async def on_guild_role_create(role: discord.Role):
 
 
 @bot.event
-async def on_guild_role_update(anc_role, role: discord.Role):
+async def on_guild_role_update(_, role: discord.Role):
     log = [i async for i in role.guild.audit_logs(limit=1, action=discord.AuditLogAction.role_update)]
-    print(log)
     if not log[0].target == role:
         return
 
@@ -247,108 +251,293 @@ async def on_guild_role_update(anc_role, role: discord.Role):
               field=[{"name": "Source", "values": "discord"}], desc=description).send()
 
 
-async def cree_role(name, perms, ctx: discord.Message):
-    global role_cache
-    role = await ctx.guild.create_role(name=name, permissions=discord.Permissions(perms.get("perms")),
-                                       hoist=perms.get("affiche"), mentionable=perms.get("mention"))
-    role_cache = role.id
-    print(role_cache, "cache")
-
-    description = (f"Nom: {name}\n"
-                   f"Mentionnable: {perms.get('mention')}\n"
-                   f"Affiché a part: {perms.get('affiche')}\n"
-                   f"Couleur HTML: {role.color}"
-                   f"   Permissions:\n"
-                   f"-{'\n -'.join([i[0] for i in role.permissions if i[1]])}")
+# met a jour le nom du role entré
+async def update_role_name(ctx: discord.Message, old_ctx, args_role, inter):
+    global att_mess
+    att_mess = {}
+    args_role.update({"name": ctx.content})
+    await menu_role(old_ctx, args_role, inter)
     await ctx.delete()
-    await Log(ctx.guild, "Role crée", discord.Color(0x54FD00), ctx.author, "creer_role",
-              field=[{"name": "Source", "values": "Commande"}], desc=description).send()
 
 
-async def choice_role_name(inter: discord.Interaction, liste_perm_select, value):
-    embed = discord.Embed(title="Role")
-    embed.add_field(name="Nom du rôle", value="Choisit le nom du rôle")
-    liste_perm = []
-    for i in liste_perm_select.get('perms').values():
-        liste_perm += [int(j) for j in i]
-    liste_perm_select["perms"] = sum(liste_perm)
-    liste_perm_select["mention"] = value
-
-    await inter.response.edit_message(view=None, embed=embed)
-    att_mess["channel"] = inter.channel
-    att_mess["user"] = inter.user
-    att_mess["type"] = "role_name"
-    att_mess["function"] = lambda ctx: cree_role(ctx.content, liste_perm_select, ctx)
-
-
-async def role_mentionnable(inter, role_option, ctx, value):
-    role_option["affiche"] = value
-    embed = discord.Embed(title="Role")
-    embed.add_field(name="Permet de mentionner ce role", value="")
-    await inter.response.edit_message(embed=embed,
-                                      view=View(ctx,
-                                                [
-                                                    Button("Activer",
-                                                           discord.ButtonStyle.green,
-                                                           lambda finter: choice_role_name(finter,
-                                                                                           role_option,
-                                                                                           True)),
-                                                    Button("Desactiver",
-                                                           discord.ButtonStyle.red,
-                                                           lambda finter: choice_role_name(finter,
-                                                                                           role_option,
-                                                                                           False))]))
+# demande d'écrire le nom du role
+async def requete_role_name(inter: discord.Interaction, ctx: commands.Context, args_role):
+    if inter.user != ctx.author:
+        await inter.response.defer()
+        return
+    embed = inter.message.embeds[0]
+    embed.add_field(name="Action: ", value="Entrez le nom du rôle", inline=False)
+    await inter.response.edit_message(embed=embed, view=View(ctx,
+                                                             [Button("Annuler",
+                                                                     discord.ButtonStyle.red,
+                                                                     lambda finter: menu_role(ctx,
+                                                                                              args_role,
+                                                                                              finter))]))
+    global att_mess
+    att_mess["channel"] = ctx.channel
+    att_mess["user"] = ctx.author
+    att_mess["type"] = "role_color"
+    att_mess["function"] = lambda ctx_new: update_role_name(ctx_new, ctx, args_role, inter)
 
 
-async def display_role(inter, role_option, ctx: commands.Context):
-    embed = discord.Embed(title="Role")
-    embed.add_field(name="Afficher ce role a part", value="")
-    await inter.response.edit_message(embed=embed,
-                                      view=View(ctx,
-                                                [
-                                                    Button("Activer",
-                                                           discord.ButtonStyle.green,
-                                                           lambda finter: role_mentionnable(finter,
-                                                                                            role_option,
-                                                                                            ctx,
-                                                                                            True)),
-                                                    Button("Desactiver",
-                                                           discord.ButtonStyle.red,
-                                                           lambda finter: role_mentionnable(finter,
-                                                                                            role_option,
-                                                                                            ctx,
-                                                                                            False))
-                                                ]))
-
-
-async def update_list_role_perm(inter: discord.Interaction, values, liste_perm_select):
-    liste_perm_select[inter.data.get("custom_id")] = values
+async def update_role_perms_slc(value, inter: discord.Interaction, role_perm_slc):
+    role_perm_slc[inter.data.get("custom_id")] = value
     await inter.response.defer()
+
+
+async def update_role_perms(inter, ctx, args_perms, role_perm_slc: dict):
+    args_perms["permissions"] = discord.Permissions(0)
+    for i in role_perm_slc.values():
+        args_perms["permissions"] = discord.Permissions(args_perms.get("permissions").value + sum([int(j) for j in i]))
+    await menu_role(ctx, args_perms, inter)
+
+
+async def requete_role_perms(inter: discord.Interaction, ctx: commands.Context, args_role):
+    if inter.user != ctx.author:
+        await inter.response.defer()
+        return
+    menu_slc = 15
+    liste_perms = []
+    for i in range(len(list(discord.Permissions.all())) // menu_slc +
+                   (1 if len(list(discord.Permissions.all())) % menu_slc else 0)):
+        liste_perms.append([(j[0], eval(f"discord.Permissions.{j[0]}.flag"))
+                            for j in list(discord.Permissions.all())[menu_slc * i:menu_slc * i + menu_slc]])
+
+    embed = inter.message.embeds[0]
+    embed.add_field(name="Action: ", value="Choisissez les perms du role", inline=False)
+
+    role_perm_slc = {}
+    await inter.response.edit_message(embed=embed, view=View(ctx,
+                                                             [
+                                                                 Selecteur(
+                                                                     "Permissions",
+                                                                     1,
+                                                                     len(i),
+                                                                     [SelecteurOption(
+                                                                         j[0],
+                                                                         "",
+                                                                         str(j[1])) for j in i],
+                                                                     lambda finter, value:
+                                                                     update_role_perms_slc(value, finter,
+                                                                                           role_perm_slc))
+                                                                 for i in liste_perms] + [
+                                                                 Button("Valider",
+                                                                        discord.ButtonStyle.green,
+                                                                        lambda finter:
+                                                                        update_role_perms(finter, ctx,
+                                                                                          args_role, role_perm_slc)),
+                                                                 Button("Annuler",
+                                                                        discord.ButtonStyle.secondary,
+                                                                        lambda finter:
+                                                                        menu_role(ctx, args_role, finter))]))
+
+
+async def update_role_display(value, ctx, args_role, inter):
+    args_role.update({"hoist": value})
+    await menu_role(ctx, args_role, inter)
+
+
+async def requete_display_role(inter: discord.Interaction, ctx: commands.Context, args_role):
+    if inter.user != ctx.author:
+        await inter.response.defer()
+        return
+    embed = inter.message.embeds[0]
+    embed.add_field(name="Action: ", value="Afficher ou nom le role a part", inline=False)
+    active = Button("Activer", discord.ButtonStyle.green, lambda finter: update_role_display(True,
+                                                                                             ctx,
+                                                                                             args_role,
+                                                                                             finter))
+    disabled = Button("Desactiver", discord.ButtonStyle.red, lambda finter: update_role_display(False,
+                                                                                                ctx,
+                                                                                                args_role,
+                                                                                                finter))
+    button_list = []
+    if not args_role.get("hoist"):
+        button_list.append(active)
+    if args_role.get("hoist") is not False:
+        button_list.append(disabled)
+    button_list.append(Button("Annuler", discord.ButtonStyle.secondary, lambda finter: menu_role(ctx,
+                                                                                                 args_role,
+                                                                                                 finter)))
+
+    await inter.response.edit_message(embed=embed,
+                                      view=View(ctx,
+                                                button_list))
+
+
+async def update_role_mentionnable(value, ctx, args_role, inter):
+    args_role.update({"mentionable": value})
+    await menu_role(ctx, args_role, inter)
+
+
+async def requete_mentionnable_role(inter: discord.Interaction, ctx: commands.Context, args_role):
+    if inter.user != ctx.author:
+        await inter.response.defer()
+        return
+    embed = inter.message.embeds[0]
+    embed.add_field(name="Action: ", value="Role Mentionable ", inline=False)
+    active = Button("Activer", discord.ButtonStyle.green, lambda finter: update_role_mentionnable(True,
+                                                                                                  ctx,
+                                                                                                  args_role,
+                                                                                                  finter))
+    disabled = Button("Desactiver", discord.ButtonStyle.red, lambda finter: update_role_mentionnable(False,
+                                                                                                     ctx,
+                                                                                                     args_role,
+                                                                                                     finter))
+    button_list = []
+    if not args_role.get("mentionable"):
+        button_list.append(active)
+    if args_role.get("mentionable") is not False:
+        button_list.append(disabled)
+    button_list.append(Button("Annuler", discord.ButtonStyle.secondary, lambda finter: menu_role(ctx,
+                                                                                                 args_role,
+                                                                                                 finter)))
+
+    await inter.response.edit_message(embed=embed,
+                                      view=View(ctx,
+                                                button_list))
+
+
+# met a jour la couleur du role
+async def update_role_color(ctx: discord.Message, old_ctx, args_role, inter):
+    global att_mess
+    att_mess = {}
+    args_role.update({"color": eval(f"0x{ctx.content.lstrip("#")}")})
+    await menu_role(old_ctx, args_role, inter)
+    await ctx.delete()
+
+
+# demande d'écrire la couleur du role au format html ex: FFFFFF, #FFFFFF
+async def requete_role_color(inter: discord.Interaction, ctx: commands.Context, args_role):
+
+    if inter.user != ctx.author:
+        await inter.response.defer()
+        return
+    embed = inter.message.embeds[0]
+    embed.add_field(name="Action: ", value="Entrez une couleur au format Hex\nhttps://g.co/kgs/Kym4F5D", inline=False)
+    await inter.response.edit_message(embed=embed, view=View(ctx,
+                                                             [Button("Annuler",
+                                                                     discord.ButtonStyle.red,
+                                                                     lambda finter: menu_role(ctx,
+                                                                                              args_role,
+                                                                                              finter))]))
+    global att_mess
+    att_mess["channel"] = ctx.channel
+    att_mess["user"] = ctx.author
+    att_mess["type"] = "role_color"
+    att_mess["function"] = lambda ctx_new: update_role_color(ctx_new, ctx, args_role, inter)
+
+
+async def valide_cree_role(inter: discord.Interaction, ctx: commands.Context, args_role):
+    global role_cache
+
+    role = await ctx.guild.create_role(**args_role)
+    role_cache = role.id
+
+    await inter.response.edit_message(view=None, embed=discord.Embed(title=f"Rôle {role.name} crée avec succés",
+                                                                     color=discord.Color(0x54FD00)))
+
+    liste_perms = []
+    liste_perms_final = [[], []]
+    max_car = 0
+    if args_role.get("permissions"):
+        for i in list(args_role.get("permissions")):
+            if i[1]:
+                liste_perms.append(i[0])
+                if len(i[0]) > max_car and liste_perms.index(i[0]) % 2 + 1:
+                    max_car = len(i[0])
+    for i in liste_perms:
+        liste_perms_final[liste_perms.index(i) % 2].append(i)
+
+    descr = f"**᲻᲻᲻᲻᲻᲻᲻᲻᲻᲻** __**{args_role.get('name')}**__\n"\
+            f"{f'Couleur HTML: {hex(args_role.get('color'))}\n'
+                if args_role.get('color') else ''}"\
+            f"{f'Role Mentionnable: '
+               f'{'Oui' if args_role.get('mentionable') else "Non"}\n'
+                if args_role.get('mentionable') is not None else ''}"\
+            f"{f'Role Affiché a part: '
+               f'{'Oui' if args_role.get('hoist') else "Non"}\n'
+                if args_role.get('hoist') is not None else ''}"\
+            f"{f'Permissions:\n\n' if liste_perms else ''}"
+
+    await Log(ctx.guild, "Role crée", discord.Color(0x54FD00), ctx.author, "creer_role",
+              [{"name": "", "values": "\n".join(liste_perms_final[0]), "inline": True},
+               {"name": "", "values": "\n".join(liste_perms_final[1]), "inline": True}],
+              descr).send()
+
+
+async def menu_role(ctx, args_role, inter=None):
+    if inter:
+        assert isinstance(inter, discord.Interaction)
+
+    liste_perms = []
+    liste_perms_final = [[], []]
+    max_car = 0
+    if args_role.get("permissions"):
+        for i in list(args_role.get("permissions")):
+            if i[1]:
+                liste_perms.append(i[0])
+                if len(i[0]) > max_car and liste_perms.index(i[0]) % 2 + 1:
+                    max_car = len(i[0])
+    for i in liste_perms:
+        liste_perms_final[liste_perms.index(i) % 2].append(i)
+
+    embed = discord.Embed(title="Création Du role",
+                          description=f"1️⃣ - Changer le Nom\n"
+                                      f"2️⃣ - Permissions\n"
+                                      f"3️⃣ - Affiché a part des autres roles\n"
+                                      f"4️⃣ - Mentionnable\n"
+                                      f"5️⃣ - Couleur\n"
+                                      f"\n"
+                                      f"Role:\n\n"
+                                      f"**᲻᲻᲻᲻᲻᲻᲻᲻᲻᲻** __**{args_role.get('name')}**__\n"
+                                      f"{f'Couleur HTML: {hex(args_role.get('color'))}\n'
+                                         if args_role.get('color') else ''}"
+                                      f"{f'Role Mentionnable: '
+                                         f'{'Oui' if args_role.get('mentionable') else "Non"}\n'
+                                         if args_role.get('mentionable') is not None else ''}"
+                                      f"{f'Role Affiché a part: '
+                                         f'{'Oui' if args_role.get('hoist')else "Non"}\n'
+                                         if args_role.get('hoist') is not None else ''}"    
+                                      f"{f'Permissions:\n\n'if liste_perms else ''}",
+                          color=args_role.get('color') if args_role.get('color') else 0x99AAB5)
+    embed.add_field(name="", value="\n".join(liste_perms_final[0]), inline=True)
+    embed.add_field(name="", value="\n".join(liste_perms_final[1]), inline=True)
+    view = View(ctx,
+                [Button("1️⃣",
+                        discord.ButtonStyle.green,
+                        lambda finter: requete_role_name(finter, ctx, args_role)),
+                 Button("2️⃣",
+                        discord.ButtonStyle.green,
+                        lambda finter: requete_role_perms(finter, ctx, args_role)),
+                 Button("3️⃣",
+                        discord.ButtonStyle.green,
+                        lambda finter: requete_display_role(finter, ctx, args_role)),
+                 Button("4️⃣",
+                        discord.ButtonStyle.green,
+                        lambda finter: requete_mentionnable_role(finter, ctx, args_role)),
+                 Button("5️⃣",
+                        discord.ButtonStyle.green,
+                        lambda finter: requete_role_color(finter, ctx, args_role)),
+                 Button("Valider",
+                        discord.ButtonStyle.green,
+                        lambda finter: valide_cree_role(finter, ctx, args_role))])
+    if not inter:
+        await ctx.send(embed=embed, view=view)
+    else:
+        if inter.response.is_done():
+            await inter.edit_original_response(embed=embed, view=view)
+        else:
+            await inter.response.edit_message(embed=embed, view=view)
 
 
 @bot.command()
 async def creer_role(ctx: commands.Context, nom_role):
-    embed = discord.Embed(title="Création Du role", description=f"1️⃣ - Changer le Nom\n"
-                                                                f"2️⃣ - Permissions\n"
-                                                                f"3️⃣ - Affiché a part des autres roles\n"
-                                                                f"4️⃣ - Mentionnable\n"
-                                                                f"5️⃣ - Couleur")
-    await ctx.send(embed=embed, view=View(ctx,
-                                          [Selecteur(
-                                              "permissions",
-                                              1, len(j),
-                                              [SelecteurOption(
-                                                  i[0],
-                                                  "",
-                                                  eval(f"discord.Permissions.{i[0]}.flag"))
-                                                  for i in j],
-                                              lambda inter, value: update_list_role_perm(
-                                                  inter, value, liste_perm_select))
-                                              for j in liste_perm_split] + [Button(
-                                               "Ok", discord.ButtonStyle.green,
-                                               lambda inter: display_role(inter,
-                                                                          {"perms": liste_perm_select},
-                                                                          ctx))]))
+    if isinstance(ctx.channel, discord.DMChannel):
+        return
+    await ctx.message.delete()
+    args_role = {"name": nom_role}
+    await menu_role(ctx, args_role)
 
     await Log(ctx.guild,
               "Commande",
@@ -448,6 +637,9 @@ async def update_word_censure(ctx_old, ctx, ctx_best, func: str):
 
 @bot.command()
 async def censure(ctx: discord.ext.commands.Context):
+    if isinstance(ctx.channel, discord.DMChannel):
+        return
+
     await ctx.message.delete()
     servers_file = open("servers.json", "r")
     servers_file = json.load(servers_file)
@@ -506,6 +698,8 @@ async def set_log_salon_2(inter: discord.Interaction, values):
 
 @bot.command()
 async def set_log_salon(ctx: commands.Context):
+    if isinstance(ctx.channel, discord.DMChannel):
+        return
     await ctx.message.delete()
     server_file = open("servers.json", "r")
     server_file = json.load(server_file)
@@ -553,7 +747,6 @@ async def reset_embed_log_option(inter: discord.Interaction, ctx):
 
 @bot.command()
 async def clear(ctx: commands.Context, nbr: str):
-
     await ctx.message.delete()
     if not nbr.isdigit():
         return
@@ -565,6 +758,8 @@ async def clear(ctx: commands.Context, nbr: str):
                          f"{i.content}") async
                         for i in ctx.channel.history(limit=int(nbr))][::-1]
     await ctx.channel.purge(limit=int(nbr))
+    if isinstance(ctx.channel, discord.DMChannel):
+        return
     await Log(ctx.guild, "Clear", discord.Color(0x731010),
               ctx.author, "clear", [
                   {"name": "Channel", "values": ctx.channel.name},
@@ -587,7 +782,6 @@ async def set_log_option(inter, option, value, ctx: commands.Context):
 
 async def log_option_2(inter: discord.Interaction, value, ctx):
     value = eval(value[0])
-    print(value)
     embed = discord.Embed(title="Log Option")
     embed.add_field(name="Option Select:", value=value[0])
     await inter.response.edit_message(embed=embed,
@@ -607,6 +801,8 @@ async def log_option_2(inter: discord.Interaction, value, ctx):
 
 @bot.command()
 async def log_option(ctx: commands.Context):
+    if isinstance(ctx.channel, discord.DMChannel):
+        return
     embed = discord.Embed(title="Log Options")
     liste_log_option_serv = []
     for i in liste_log_option:
@@ -615,7 +811,6 @@ async def log_option(ctx: commands.Context):
             file = json.load(file)
             liste_log_option_serv.append([i, file.get(str(ctx.guild.id)).get('log_option').get(i)])
     embed.description = "\n".join([f"{i[0]}: {i[1]}" for i in liste_log_option_serv])
-    print(liste_log_option_serv)
     await ctx.send(view=View(
         ctx,
         [
@@ -760,7 +955,6 @@ async def on_ready():
 
     bot_running = True
     liste_log_option += [i.name for i in bot.commands]
-    print([(i[0], eval(f"discord.Permissions.{i[0]}.flag")) for i in list(discord.Permissions.all())[:24]])
     print("pret")
     print(datetime.datetime.now())
     threading.Thread(target=stat_serv).start()
