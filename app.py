@@ -1,18 +1,18 @@
 import time
 from discord.ext import commands, tasks
 import discord
+from discord import errors
 import requests
 import json
 import datetime
 import mysql.connector
-from config import sql_mc, TOKEN
+from config import sql_mc, TOKEN, prefixe
 import threading
 import unidecode
 import asyncio
 
 instens = discord.Intents().all()
-prexife = "t."
-bot = commands.Bot(command_prefix=prexife, intents=instens, help_command=None)
+bot = commands.Bot(command_prefix=prefixe, intents=instens, help_command=None)
 bot_running = None
 att_mess = {}
 liste_log_option = ["message_edit", "verif_censure"]
@@ -172,6 +172,7 @@ async def on_message(ctx: discord.Message):
             if att_mess["channel"] == ctx.channel and att_mess["user"] == ctx.author:
                 if att_mess["type"] in ["supre", "add_mot", "role_color"]:
                     await att_mess["function"](ctx)
+                    att_mess = {}
             await bot.process_commands(ctx)
             return
         if ctx.author != bot.user:
@@ -252,16 +253,16 @@ async def on_guild_role_update(_, role: discord.Role):
 
 
 # met a jour le nom du role entré
-async def update_role_name(ctx: discord.Message, old_ctx, args_role, inter):
+async def update_role_name(ctx: discord.Message, old_ctx, args_role, args_edit_role, inter):
     global att_mess
     att_mess = {}
     args_role.update({"name": ctx.content})
-    await menu_role(old_ctx, args_role, inter)
+    await menu_role(old_ctx, args_role, args_edit_role, inter)
     await ctx.delete()
 
 
 # demande d'écrire le nom du role
-async def requete_role_name(inter: discord.Interaction, ctx: commands.Context, args_role):
+async def requete_role_name(inter: discord.Interaction, ctx: commands.Context, args_role, args_edit_role):
     if inter.user != ctx.author:
         await inter.response.defer()
         return
@@ -272,12 +273,13 @@ async def requete_role_name(inter: discord.Interaction, ctx: commands.Context, a
                                                                      discord.ButtonStyle.red,
                                                                      lambda finter: menu_role(ctx,
                                                                                               args_role,
+                                                                                              args_edit_role,
                                                                                               finter))]))
     global att_mess
     att_mess["channel"] = ctx.channel
     att_mess["user"] = ctx.author
     att_mess["type"] = "role_color"
-    att_mess["function"] = lambda ctx_new: update_role_name(ctx_new, ctx, args_role, inter)
+    att_mess["function"] = lambda ctx_new: update_role_name(ctx_new, ctx, args_role, args_edit_role, inter)
 
 
 async def update_role_perms_slc(value, inter: discord.Interaction, role_perm_slc):
@@ -285,14 +287,14 @@ async def update_role_perms_slc(value, inter: discord.Interaction, role_perm_slc
     await inter.response.defer()
 
 
-async def update_role_perms(inter, ctx, args_perms, role_perm_slc: dict):
+async def update_role_perms(inter, ctx, args_perms, args_edit_role, role_perm_slc: dict):
     args_perms["permissions"] = discord.Permissions(0)
     for i in role_perm_slc.values():
         args_perms["permissions"] = discord.Permissions(args_perms.get("permissions").value + sum([int(j) for j in i]))
-    await menu_role(ctx, args_perms, inter)
+    await menu_role(ctx, args_perms, args_edit_role, inter)
 
 
-async def requete_role_perms(inter: discord.Interaction, ctx: commands.Context, args_role):
+async def requete_role_perms(inter: discord.Interaction, ctx: commands.Context, args_role, args_edit_role):
     if inter.user != ctx.author:
         await inter.response.defer()
         return
@@ -325,19 +327,22 @@ async def requete_role_perms(inter: discord.Interaction, ctx: commands.Context, 
                                                                         discord.ButtonStyle.green,
                                                                         lambda finter:
                                                                         update_role_perms(finter, ctx,
-                                                                                          args_role, role_perm_slc)),
+                                                                                          args_role,
+                                                                                          args_edit_role,
+                                                                                          role_perm_slc)),
                                                                  Button("Annuler",
                                                                         discord.ButtonStyle.secondary,
                                                                         lambda finter:
-                                                                        menu_role(ctx, args_role, finter))]))
+                                                                        menu_role(ctx, args_role,
+                                                                                  args_edit_role, finter))]))
 
 
-async def update_role_display(value, ctx, args_role, inter):
+async def update_role_display(value, ctx, args_role, args_edit_role, inter):
     args_role.update({"hoist": value})
-    await menu_role(ctx, args_role, inter)
+    await menu_role(ctx, args_role, args_edit_role, inter)
 
 
-async def requete_display_role(inter: discord.Interaction, ctx: commands.Context, args_role):
+async def requete_display_role(inter: discord.Interaction, ctx: commands.Context, args_role, args_edit_role):
     if inter.user != ctx.author:
         await inter.response.defer()
         return
@@ -346,10 +351,12 @@ async def requete_display_role(inter: discord.Interaction, ctx: commands.Context
     active = Button("Activer", discord.ButtonStyle.green, lambda finter: update_role_display(True,
                                                                                              ctx,
                                                                                              args_role,
+                                                                                             args_edit_role,
                                                                                              finter))
     disabled = Button("Desactiver", discord.ButtonStyle.red, lambda finter: update_role_display(False,
                                                                                                 ctx,
                                                                                                 args_role,
+                                                                                                args_edit_role,
                                                                                                 finter))
     button_list = []
     if not args_role.get("hoist"):
@@ -358,6 +365,7 @@ async def requete_display_role(inter: discord.Interaction, ctx: commands.Context
         button_list.append(disabled)
     button_list.append(Button("Annuler", discord.ButtonStyle.secondary, lambda finter: menu_role(ctx,
                                                                                                  args_role,
+                                                                                                 args_edit_role,
                                                                                                  finter)))
 
     await inter.response.edit_message(embed=embed,
@@ -365,12 +373,12 @@ async def requete_display_role(inter: discord.Interaction, ctx: commands.Context
                                                 button_list))
 
 
-async def update_role_mentionnable(value, ctx, args_role, inter):
+async def update_role_mentionnable(value, ctx, args_role, args_edit_role, inter):
     args_role.update({"mentionable": value})
-    await menu_role(ctx, args_role, inter)
+    await menu_role(ctx, args_role, args_edit_role, inter)
 
 
-async def requete_mentionnable_role(inter: discord.Interaction, ctx: commands.Context, args_role):
+async def requete_mentionnable_role(inter: discord.Interaction, ctx: commands.Context, args_role, args_edit_role):
     if inter.user != ctx.author:
         await inter.response.defer()
         return
@@ -379,10 +387,12 @@ async def requete_mentionnable_role(inter: discord.Interaction, ctx: commands.Co
     active = Button("Activer", discord.ButtonStyle.green, lambda finter: update_role_mentionnable(True,
                                                                                                   ctx,
                                                                                                   args_role,
+                                                                                                  args_edit_role,
                                                                                                   finter))
     disabled = Button("Desactiver", discord.ButtonStyle.red, lambda finter: update_role_mentionnable(False,
                                                                                                      ctx,
                                                                                                      args_role,
+                                                                                                     args_edit_role,
                                                                                                      finter))
     button_list = []
     if not args_role.get("mentionable"):
@@ -391,6 +401,7 @@ async def requete_mentionnable_role(inter: discord.Interaction, ctx: commands.Co
         button_list.append(disabled)
     button_list.append(Button("Annuler", discord.ButtonStyle.secondary, lambda finter: menu_role(ctx,
                                                                                                  args_role,
+                                                                                                 args_edit_role,
                                                                                                  finter)))
 
     await inter.response.edit_message(embed=embed,
@@ -399,16 +410,20 @@ async def requete_mentionnable_role(inter: discord.Interaction, ctx: commands.Co
 
 
 # met a jour la couleur du role
-async def update_role_color(ctx: discord.Message, old_ctx, args_role, inter):
+async def update_role_color(ctx: discord.Message, old_ctx, args_role, args_edit_role, inter):
     global att_mess
     att_mess = {}
-    args_role.update({"color": eval(f"0x{ctx.content.lstrip("#")}")})
-    await menu_role(old_ctx, args_role, inter)
-    await ctx.delete()
+    try:
+        args_role.update({"color": eval(f"0x{ctx.content.lstrip("#")}")})
+    except SyntaxError:
+        pass
+    finally:
+        await menu_role(old_ctx, args_role, args_edit_role, inter)
+        await ctx.delete()
 
 
 # demande d'écrire la couleur du role au format html ex: FFFFFF, #FFFFFF
-async def requete_role_color(inter: discord.Interaction, ctx: commands.Context, args_role):
+async def requete_role_color(inter: discord.Interaction, ctx: commands.Context, args_role, args_edit_role):
 
     if inter.user != ctx.author:
         await inter.response.defer()
@@ -420,19 +435,25 @@ async def requete_role_color(inter: discord.Interaction, ctx: commands.Context, 
                                                                      discord.ButtonStyle.red,
                                                                      lambda finter: menu_role(ctx,
                                                                                               args_role,
+                                                                                              args_edit_role,
                                                                                               finter))]))
     global att_mess
     att_mess["channel"] = ctx.channel
     att_mess["user"] = ctx.author
     att_mess["type"] = "role_color"
-    att_mess["function"] = lambda ctx_new: update_role_color(ctx_new, ctx, args_role, inter)
+    att_mess["function"] = lambda ctx_new: update_role_color(ctx_new, ctx, args_role, args_edit_role, inter)
 
 
-async def valide_cree_role(inter: discord.Interaction, ctx: commands.Context, args_role):
+async def valide_cree_role(inter: discord.Interaction, ctx: commands.Context, args_role, args_edit_role):
     global role_cache
 
     role = await ctx.guild.create_role(**args_role)
     role_cache = role.id
+    if args_edit_role:
+        try:
+            await role.edit(**args_edit_role)
+        except errors.HTTPException:
+            pass
 
     await inter.response.edit_message(view=None, embed=discord.Embed(title=f"Rôle {role.name} crée avec succés",
                                                                      color=discord.Color(0x54FD00)))
@@ -466,7 +487,47 @@ async def valide_cree_role(inter: discord.Interaction, ctx: commands.Context, ar
               descr).send()
 
 
-async def menu_role(ctx, args_role, inter=None):
+async def update_position_role(value, inter, ctx, args_role, args_edit_role):
+    args_edit_role["position"] = ctx.guild.get_role(int(value[0])).position + 1
+    await menu_role(ctx, args_role, args_edit_role, inter=inter)
+
+
+async def requete_position_role(inter: discord.Interaction, ctx: commands.Context, args_role, args_edit_role):
+    if inter.user != ctx.author:
+        await inter.response.defer()
+        return
+    embed = inter.message.embeds[0]
+    embed.add_field(name="Action: ", value="Choisissez le role qui seras au dessus du votre", inline=False)
+    list_roles = sorted(ctx.guild.roles, key=lambda x: x.position)[::-1]
+    menu_slc = 25
+    liste_roles = []
+    for i in range(len(list(list_roles)) // menu_slc +
+                   (1 if len(list(list_roles)) % menu_slc else 0)):
+        liste_roles.append([j for j in list(list_roles)[menu_slc * i:menu_slc * i + menu_slc]])
+    await inter.response.edit_message(embed=embed, view=View(ctx,
+                                                             [
+                                                                 Selecteur(
+                                                                     "Position", 1, 1,
+                                                                     [
+                                                                         SelecteurOption(j.name,
+                                                                                         j.position,
+                                                                                         j.id)
+                                                                         for j in i],
+                                                                     lambda finter, value:
+                                                                     update_position_role(value,
+                                                                                          finter,
+                                                                                          ctx,
+                                                                                          args_role,
+                                                                                          args_edit_role))
+                                                                 for i in liste_roles] + [
+                                                                 Button("Annuler", discord.ButtonStyle.secondary,
+                                                                        lambda finter: menu_role(ctx, args_role,
+                                                                                                 args_edit_role,
+                                                                                                 finter))
+                                                             ]))
+
+
+async def menu_role(ctx, args_role, args_edit_role, inter=None):
     if inter:
         assert isinstance(inter, discord.Interaction)
 
@@ -488,6 +549,7 @@ async def menu_role(ctx, args_role, inter=None):
                                       f"3️⃣ - Affiché a part des autres roles\n"
                                       f"4️⃣ - Mentionnable\n"
                                       f"5️⃣ - Couleur\n"
+                                      f"6️⃣ - Position du role"
                                       f"\n"
                                       f"Role:\n\n"
                                       f"**᲻᲻᲻᲻᲻᲻᲻᲻᲻᲻** __**{args_role.get('name')}**__\n"
@@ -498,7 +560,9 @@ async def menu_role(ctx, args_role, inter=None):
                                          if args_role.get('mentionable') is not None else ''}"
                                       f"{f'Role Affiché a part: '
                                          f'{'Oui' if args_role.get('hoist')else "Non"}\n'
-                                         if args_role.get('hoist') is not None else ''}"    
+                                         if args_role.get('hoist') is not None else ''}"
+                                      f"{f'Position: {args_edit_role.get('position')}\n'
+                                         if args_edit_role.get('position') else ""}"    
                                       f"{f'Permissions:\n\n'if liste_perms else ''}",
                           color=args_role.get('color') if args_role.get('color') else 0x99AAB5)
     embed.add_field(name="", value="\n".join(liste_perms_final[0]), inline=True)
@@ -506,22 +570,29 @@ async def menu_role(ctx, args_role, inter=None):
     view = View(ctx,
                 [Button("1️⃣",
                         discord.ButtonStyle.green,
-                        lambda finter: requete_role_name(finter, ctx, args_role)),
+                        lambda finter: requete_role_name(finter, ctx, args_role, args_edit_role)),
                  Button("2️⃣",
                         discord.ButtonStyle.green,
-                        lambda finter: requete_role_perms(finter, ctx, args_role)),
+                        lambda finter: requete_role_perms(finter, ctx, args_role, args_edit_role)),
                  Button("3️⃣",
                         discord.ButtonStyle.green,
-                        lambda finter: requete_display_role(finter, ctx, args_role)),
+                        lambda finter: requete_display_role(finter, ctx, args_role, args_edit_role)),
                  Button("4️⃣",
                         discord.ButtonStyle.green,
-                        lambda finter: requete_mentionnable_role(finter, ctx, args_role)),
+                        lambda finter: requete_mentionnable_role(finter, ctx, args_role, args_edit_role)),
                  Button("5️⃣",
                         discord.ButtonStyle.green,
-                        lambda finter: requete_role_color(finter, ctx, args_role)),
+                        lambda finter: requete_role_color(finter, ctx, args_role, args_edit_role)),
+                 Button("6️⃣",
+                        discord.ButtonStyle.green,
+                        lambda finter: requete_position_role(finter, ctx, args_role, args_edit_role)),
                  Button("Valider",
                         discord.ButtonStyle.green,
-                        lambda finter: valide_cree_role(finter, ctx, args_role))])
+                        lambda finter: valide_cree_role(finter, ctx, args_role, args_edit_role)),
+                 Button("Annuler",
+                        discord.ButtonStyle.secondary,
+                        lambda finter: finter.response.edit_message(view=None, embed=discord.Embed(
+                            title="Création du role annulé")))])
     if not inter:
         await ctx.send(embed=embed, view=view)
     else:
@@ -537,7 +608,7 @@ async def creer_role(ctx: commands.Context, nom_role):
         return
     await ctx.message.delete()
     args_role = {"name": nom_role}
-    await menu_role(ctx, args_role)
+    await menu_role(ctx, args_role, {})
 
     await Log(ctx.guild,
               "Commande",
@@ -957,7 +1028,8 @@ async def on_ready():
     liste_log_option += [i.name for i in bot.commands]
     print("pret")
     print(datetime.datetime.now())
-    threading.Thread(target=stat_serv).start()
+    if prexife == "m.":
+        threading.Thread(target=stat_serv).start()
 
 
 def stop():
